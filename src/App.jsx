@@ -129,9 +129,8 @@ function App() {
                     Until {formatTimeHM(activeBlock.endTime)}
                   </p>
 
-                  {/* Visual Progress Bar for the Hour */}
                   <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '32px' }}>
-                    <div style={{ height: '100%', width: \`\${countdownPercentage}%\`, background: 'var(--accent)', transition: 'width 1s linear' }} />
+                    <div style={{ height: '100%', width: `${countdownPercentage}%`, background: 'var(--accent)', transition: 'width 1s linear' }} />
                   </div>
 
                   <div className="block-actions">
@@ -171,21 +170,21 @@ function App() {
                 else if (index < activeBlockIndex || (activeBlockIndex === -1 && currentMs > block.endTime.getTime())) statusClass = "past";
 
                 return (
-                  <div className={\`timeline-item \${statusClass}\`} key={block.id}>
-              <div className="timeline-dot"></div>
-              <div className="timeline-time">{block.time}</div>
-              <div className="timeline-content">
-                <h4>{block.title}</h4>
-                <p>{block.detail}</p>
-              </div>
-            </div>
-            );
+                  <div className={`timeline-item ${statusClass}`} key={block.id}>
+                    <div className="timeline-dot"></div>
+                    <div className="timeline-time">{block.time}</div>
+                    <div className="timeline-content">
+                      <h4>{block.title}</h4>
+                      <p>{block.detail}</p>
+                    </div>
+                  </div>
+                );
               })}
+            </div>
           </div>
         </div>
       </div>
     </div>
-    </div >
   );
 }
 
