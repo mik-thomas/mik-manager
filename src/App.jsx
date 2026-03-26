@@ -1,4 +1,25 @@
 import React, { useState, useEffect } from 'react';
+import LearnTab from './components/LearnTab.jsx';
+import {
+  recordTaskCompletion,
+  recordProcrastination,
+  getPredictedMinutes,
+  getLearnSettings,
+  buildCoachMessage,
+} from './lib/learn';
+
+const SNOOZE_KEY = 'mik_snooze_until';
+
+function readSnoozeFromStorage() {
+  const raw = localStorage.getItem(SNOOZE_KEY);
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (d.getTime() <= Date.now()) {
+    localStorage.removeItem(SNOOZE_KEY);
+    return null;
+  }
+  return d;
+}
 
 const INITIAL_TASKS = [
   { id: 1, localOffice: "N & W Gloucester", assessor: "Helen", eventDate: "15 October 2025", remoteSite: "Site", shadowedBy: "Jeremy" },
@@ -36,29 +57,37 @@ function padZero(num) {
 
 function App() {
   const [activeTab, setActiveTab] = useState('hourly');
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [activeTaskNotes, setActiveTaskNotes] = useState("");
-  const [globalNotes, setGlobalNotes] = useState({});
-  const [taskTiming, setTaskTiming] = useState({});
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [activeTaskNotes, setActiveTaskNotes] = useState(
+    () => localStorage.getItem('mik_daily_notes') || ''
+  );
+  const [globalNotes, setGlobalNotes] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('mik_global_notes') || '{}');
+    } catch {
+      return {};
+    }
+  });
+  const [taskTiming, setTaskTiming] = useState(() => {
+    const raw = localStorage.getItem('mik_task_timing');
+    if (!raw) return {};
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  });
+  const [snoozeUntil, setSnoozeUntil] = useState(() => readSnoozeFromStorage());
 
   useEffect(() => {
-    const savedDaily = localStorage.getItem('mik_daily_notes') || "";
-    setActiveTaskNotes(savedDaily);
-
-    const savedGlobal = localStorage.getItem('mik_global_notes') || "{}";
-    try {
-      setGlobalNotes(JSON.parse(savedGlobal));
-    } catch (e) { }
-
-    const savedTiming = localStorage.getItem('mik_task_timing');
-    if (savedTiming) {
-      try {
-        setTaskTiming(JSON.parse(savedTiming));
-      } catch(e) {}
-    }
-
     const timer = setInterval(() => {
-      setCurrentTime(new Date());
+      const now = new Date();
+      setCurrentTime(now);
+      setSnoozeUntil((prev) => {
+        if (!prev || now.getTime() < prev.getTime()) return prev;
+        localStorage.removeItem(SNOOZE_KEY);
+        return null;
+      });
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -136,6 +165,47 @@ function App() {
 
   const formatTimeHM = (date) => `${date.getHours()}:${padZero(date.getMinutes())}`;
 
+  const nextBlock =
+    activeBlockIndex >= 0 && activeBlockIndex < scheduleWithDates.length - 1
+      ? scheduleWithDates[activeBlockIndex + 1]
+      : null;
+
+  const inSnooze = Boolean(snoozeUntil && currentTime < snoozeUntil);
+  const graceMinutes = getLearnSettings().graceMinutes;
+  const predictedActive = activeBlock ? getPredictedMinutes(activeBlock.title) : null;
+  const predictedNext = nextBlock ? getPredictedMinutes(nextBlock.title) : null;
+  const coachMessage = buildCoachMessage({
+    activeTitle: activeBlock?.title,
+    nextTitle: nextBlock?.title,
+    predictedActive,
+    predictedNext,
+    inSnooze,
+    snoozeEndsAt: inSnooze ? snoozeUntil : null,
+    graceMinutes,
+  });
+
+  const handleMarkComplete = () => {
+    if (!activeBlock) return;
+    const minutes = getElapsedSeconds(activeBlock.id) / 60;
+    recordTaskCompletion(activeBlock.title, minutes);
+    if (taskTiming[activeBlock.id]?.isRunning) toggleTimer(activeBlock.id);
+    window.dispatchEvent(new Event('mik-learn-updated'));
+  };
+
+  const handleProcrastinate = (minutes) => {
+    const m = minutes ?? getLearnSettings().defaultSnoozeMinutes;
+    recordProcrastination(m);
+    const end = new Date(currentTime.getTime() + m * 60000);
+    setSnoozeUntil(end);
+    localStorage.setItem(SNOOZE_KEY, end.toISOString());
+    window.dispatchEvent(new Event('mik-learn-updated'));
+  };
+
+  const handleEndSnooze = () => {
+    setSnoozeUntil(null);
+    localStorage.removeItem(SNOOZE_KEY);
+  };
+
   // VIEWS
   const renderHourlyFocus = () => (
     <>
@@ -149,26 +219,61 @@ function App() {
           <div className="active-block">
             {activeBlock ? (
               <>
-                <div className="status-label">
-                  <span className="pulse-led"></span>
-                  ACTIVE HOUR: YOU SHOULD BE DOING THIS NOW
+                <div className={`status-label ${inSnooze ? 'snooze' : ''}`}>
+                  <span className={`pulse-led ${inSnooze ? 'snooze-led' : ''}`}></span>
+                  {inSnooze
+                    ? 'BREAK: SPACE YOU CHOSE'
+                    : 'ACTIVE HOUR: NUDGE, NOT SHAME'}
                 </div>
                 <h2 className="current-task-title">{activeBlock.title}</h2>
+                {predictedActive != null && (
+                  <p className="predicted-pill">Learned pace: ~{predictedActive} min for similar blocks</p>
+                )}
                 <div className="countdown">{countdownText}</div>
                 <p style={{ color: 'var(--text-secondary)', margin: '0 0 20px 0' }}>Until {formatTimeHM(activeBlock.endTime)}</p>
-                <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '32px' }}>
+                <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '24px' }}>
                   <div style={{ height: '100%', width: `${countdownPercentage}%`, background: 'var(--accent)', transition: 'width 1s linear' }} />
                 </div>
-                <div className="block-actions" style={{ alignItems: 'center' }}>
-                  <button className="btn primary">Mark Complete</button>
-                  <button 
-                    className={`btn ${taskTiming[activeBlock.id]?.isRunning ? 'danger' : 'success'}`} 
+                <div className="coach-card">
+                  <p className="coach-text">{coachMessage}</p>
+                  {nextBlock && (
+                    <p className="coach-next">
+                      Next when you’re ready: <strong>{nextBlock.title}</strong>
+                      {predictedNext != null && <span> · ~{predictedNext} min from your history</span>}
+                    </p>
+                  )}
+                </div>
+                <div className="block-actions" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button type="button" className="btn primary" onClick={handleMarkComplete}>
+                    Mark complete
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${taskTiming[activeBlock.id]?.isRunning ? 'danger' : 'success'}`}
                     onClick={() => toggleTimer(activeBlock.id)}
                   >
-                    {taskTiming[activeBlock.id]?.isRunning ? '⏹️ Stop Timer' : '▶️ Start Timer'}
+                    {taskTiming[activeBlock.id]?.isRunning ? '⏹️ Stop timer' : '▶️ Start timer'}
                   </button>
                   <div style={{ fontSize: '20px', fontWeight: 'bold', fontFamily: 'monospace', color: 'var(--accent)', minWidth: '100px', display: 'inline-block' }}>
                     {formatElapsed(getElapsedSeconds(activeBlock.id))}
+                  </div>
+                </div>
+                <div className="procrastinate-row">
+                  <span className="procrastinate-label">Need procrastination time?</span>
+                  <div className="procrastinate-actions">
+                    {[5, 10, 15, 25].map((m) => (
+                      <button key={m} type="button" className="btn btn-snooze" onClick={() => handleProcrastinate(m)}>
+                        {m}m
+                      </button>
+                    ))}
+                    <button type="button" className="btn btn-snooze" onClick={() => handleProcrastinate()}>
+                      Default ({getLearnSettings().defaultSnoozeMinutes}m)
+                    </button>
+                    {inSnooze && (
+                      <button type="button" className="btn btn-back" onClick={handleEndSnooze}>
+                        I’m back
+                      </button>
+                    )}
                   </div>
                 </div>
               </>
@@ -329,6 +434,9 @@ function App() {
         <div className={`nav-item ${activeTab === 'workqueue' ? 'active' : ''}`} onClick={() => setActiveTab('workqueue')}>
           <span>📋</span> Work Queue
         </div>
+        <div className={`nav-item ${activeTab === 'learn' ? 'active' : ''}`} onClick={() => setActiveTab('learn')}>
+          <span>🧠</span> Learn
+        </div>
         <div className={`nav-item ${activeTab === 'calendar' ? 'active' : ''}`} onClick={() => setActiveTab('calendar')}>
           <span>🗓️</span> Calendar Sync
         </div>
@@ -344,6 +452,7 @@ function App() {
       <div className="main-content">
         {activeTab === 'hourly' && renderHourlyFocus()}
         {activeTab === 'workqueue' && renderWorkQueue()}
+        {activeTab === 'learn' && <LearnTab />}
         {activeTab === 'calendar' && renderCalendarSync()}
         {activeTab === 'settings' && renderSettings()}
       </div>
