@@ -39,6 +39,7 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeTaskNotes, setActiveTaskNotes] = useState("");
   const [globalNotes, setGlobalNotes] = useState({});
+  const [taskTiming, setTaskTiming] = useState({});
 
   useEffect(() => {
     const savedDaily = localStorage.getItem('mik_daily_notes') || "";
@@ -48,6 +49,13 @@ function App() {
     try {
       setGlobalNotes(JSON.parse(savedGlobal));
     } catch (e) { }
+
+    const savedTiming = localStorage.getItem('mik_task_timing');
+    if (savedTiming) {
+      try {
+        setTaskTiming(JSON.parse(savedTiming));
+      } catch(e) {}
+    }
 
     const timer = setInterval(() => {
       setCurrentTime(new Date());
@@ -65,6 +73,39 @@ function App() {
     setGlobalNotes(updated);
     localStorage.setItem('mik_global_notes', JSON.stringify(updated));
   }
+
+  const toggleTimer = (taskId) => {
+    setTaskTiming(prev => {
+      const current = prev[taskId] || { totalElapsed: 0, isRunning: false, lastStartTime: null };
+      const now = new Date().getTime();
+      let updated;
+      if (current.isRunning) {
+        updated = { ...current, isRunning: false, totalElapsed: current.totalElapsed + (now - current.lastStartTime), lastStartTime: null };
+      } else {
+        updated = { ...current, isRunning: true, lastStartTime: now };
+      }
+      const newTiming = { ...prev, [taskId]: updated };
+      localStorage.setItem('mik_task_timing', JSON.stringify(newTiming));
+      return newTiming;
+    });
+  };
+
+  const getElapsedSeconds = (taskId) => {
+    const timing = taskTiming[taskId];
+    if (!timing) return 0;
+    let elapsed = timing.totalElapsed;
+    if (timing.isRunning && timing.lastStartTime) {
+      elapsed += (currentTime.getTime() - timing.lastStartTime);
+    }
+    return Math.floor(elapsed / 1000);
+  };
+
+  const formatElapsed = (totalSeconds) => {
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return `${padZero(h)}:${padZero(m)}:${padZero(s)}`;
+  };
 
   // Calculate Active Block
   let activeBlockIndex = -1;
@@ -118,9 +159,17 @@ function App() {
                 <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '32px' }}>
                   <div style={{ height: '100%', width: `${countdownPercentage}%`, background: 'var(--accent)', transition: 'width 1s linear' }} />
                 </div>
-                <div className="block-actions">
+                <div className="block-actions" style={{ alignItems: 'center' }}>
                   <button className="btn primary">Mark Complete</button>
-                  <button className="btn">Ask for Details</button>
+                  <button 
+                    className={`btn ${taskTiming[activeBlock.id]?.isRunning ? 'danger' : 'success'}`} 
+                    onClick={() => toggleTimer(activeBlock.id)}
+                  >
+                    {taskTiming[activeBlock.id]?.isRunning ? '⏹️ Stop Timer' : '▶️ Start Timer'}
+                  </button>
+                  <div style={{ fontSize: '20px', fontWeight: 'bold', fontFamily: 'monospace', color: 'var(--accent)', minWidth: '100px', display: 'inline-block' }}>
+                    {formatElapsed(getElapsedSeconds(activeBlock.id))}
+                  </div>
                 </div>
               </>
             ) : (
@@ -254,6 +303,22 @@ function App() {
     </>
   );
 
+  const renderSettings = () => (
+    <>
+      <div className="greeting">
+        <h1>Settings</h1>
+        <p>Configure your application preferences.</p>
+      </div>
+      <div className="timeline-card" style={{ textAlign: 'center', padding: '60px 20px' }}>
+        <div style={{ fontSize: '64px', marginBottom: '20px' }}>⚙️</div>
+        <h2>Application Settings</h2>
+        <p style={{ color: 'var(--text-secondary)', maxWidth: '500px', margin: '0 auto 30px', lineHeight: '1.6' }}>
+          Settings configuration options will appear here. For now, all preferences are set to their defaults.
+        </p>
+      </div>
+    </>
+  );
+
   return (
     <div className="app-container">
       <div className="sidebar">
@@ -267,7 +332,11 @@ function App() {
         <div className={`nav-item ${activeTab === 'calendar' ? 'active' : ''}`} onClick={() => setActiveTab('calendar')}>
           <span>🗓️</span> Calendar Sync
         </div>
-        <div className="nav-item" style={{ marginTop: 'auto' }}>
+        <div 
+          className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} 
+          style={{ marginTop: 'auto' }}
+          onClick={() => setActiveTab('settings')}
+        >
           <span>⚙️</span> Settings
         </div>
       </div>
@@ -276,6 +345,7 @@ function App() {
         {activeTab === 'hourly' && renderHourlyFocus()}
         {activeTab === 'workqueue' && renderWorkQueue()}
         {activeTab === 'calendar' && renderCalendarSync()}
+        {activeTab === 'settings' && renderSettings()}
       </div>
     </div>
   );

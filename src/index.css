@@ -220,6 +220,28 @@ body {
   box-shadow: 0 0 16px var(--accent-glow);
 }
 
+.btn.danger {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn.danger:hover {
+  background: rgba(239, 68, 68, 0.4);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.5);
+}
+
+.btn.success {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: var(--success);
+  color: #fff;
+}
+
+.btn.success:hover {
+  background: rgba(16, 185, 129, 0.4);
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.5);
+}
+
 /* Timeline UI */
 .timeline-card {
   background: var(--card-bg);
