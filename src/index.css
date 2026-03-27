@@ -1372,6 +1372,64 @@ h2.card-title {
   accent-color: var(--accent);
 }
 
+.voice-eleven {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(251, 191, 36, 0.15);
+}
+
+.voice-eleven-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.voice-eleven-warn {
+  color: rgba(251, 191, 36, 0.72);
+}
+
+.voice-eleven-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.voice-eleven-input {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: rgba(10, 13, 18, 0.75);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-mono);
+}
+
+.voice-eleven-input:focus {
+  outline: 2px solid rgba(251, 191, 36, 0.45);
+  outline-offset: 1px;
+}
+
+.voice-eleven-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.voice-eleven-active {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--success);
+}
+
 /* Flight plan (day arc) */
 .flight-plan-card {
   margin-bottom: 28px;

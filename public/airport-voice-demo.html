@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Airport-style voice demo — triple chime + inflight</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 36rem;
+        margin: 3rem auto;
+        padding: 0 1.25rem;
+        background: #0c0c0e;
+        color: #e8e8e6;
+        line-height: 1.5;
+      }
+      h1 {
+        font-size: 1.15rem;
+        font-weight: 600;
+      }
+      p {
+        color: #a8a8a4;
+        font-size: 0.95rem;
+      }
+      button {
+        margin-top: 1rem;
+        padding: 0.65rem 1rem;
+        border-radius: 8px;
+        border: 1px solid #333;
+        background: #1a1a1c56;
+        color: #f5e6a8;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #252528;
+      }
+      .note {
+        margin-top: 1.5rem;
+        font-size: 0.85rem;
+        color: #6b6b68;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Triple cabin chime + inflight noise + PA voice</h1>
+    <p>
+      Three-note bell (E6 · B5 · G5), then low <strong>cabin / airbed</strong> under the spoken line (same idea as MIK
+      voice prompts). Click <strong>Play example</strong> once to unlock audio.
+    </p>
+    <button type="button" id="play">Play example</button>
+    <p class="note">
+      This standalone page mirrors <code>voiceAircraft.js</code> + <code>voice.js</code> in the app. Speech is still
+      your system voice, not Eleven Labs.
+    </p>
+    <script>
+      const TRIPLE_CHIME_TO_SPEECH_MS = 920;
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      let sharedCtx = null;
+
+      function playTripleBellChime(ctx) {
+        const masterGain = 0.62;
+        const t0 = ctx.currentTime;
+        const master = ctx.createGain();
+        master.gain.value = masterGain;
+        master.connect(ctx.destination);
+
+        function strike(hz, start, dur) {
+          const f1 = ctx.createOscillator();
+          const f2 = ctx.createOscillator();
+          f1.type = 'sine';
+          f2.type = 'sine';
+          f1.frequency.setValueAtTime(hz, start);
+          f2.frequency.setValueAtTime(hz * 2.01, start);
+
+          const g1 = ctx.createGain();
+          const g2 = ctx.createGain();
+          const mix = ctx.createGain();
+
+          g1.gain.setValueAtTime(0.001, start);
+          g1.gain.linearRampToValueAtTime(0.5, start + 0.018);
+          g1.gain.exponentialRampToValueAtTime(0.001, start + dur);
+
+          g2.gain.setValueAtTime(0.001, start);
+          g2.gain.linearRampToValueAtTime(0.09, start + 0.022);
+          g2.gain.exponentialRampToValueAtTime(0.001, start + dur * 0.92);
+
+          f1.connect(g1);
+          f2.connect(g2);
+          g1.connect(mix);
+          g2.connect(mix);
+          mix.connect(master);
+
+          f1.start(start);
+          f2.start(start);
+          f1.stop(start + dur + 0.06);
+          f2.stop(start + dur + 0.06);
+        }
+
+        strike(1318.51, t0 + 0.0, 0.32);
+        strike(987.77, t0 + 0.19, 0.34);
+        strike(783.99, t0 + 0.4, 0.38);
+      }
+
+      function startInflightAmbience(ctx) {
+        const sampleRate = ctx.sampleRate;
+        const seconds = 4;
+        const n = Math.floor(sampleRate * seconds);
+        const buffer = ctx.createBuffer(1, n, sampleRate);
+        const data = buffer.getChannelData(0);
+        let b0 = 0;
+        let b1 = 0;
+        let b2 = 0;
+        for (let i = 0; i < n; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + white * 0.0555179;
+          b1 = 0.99332 * b1 + white * 0.0750759;
+          b2 = 0.969 * b2 + white * 0.153852;
+          const pink = b0 + b1 + b2 + white * 0.5362;
+          data[i] = pink * 0.11;
+        }
+
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = true;
+
+        const hp = ctx.createBiquadFilter();
+        hp.type = 'highpass';
+        hp.frequency.value = 90;
+
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 520;
+        lp.Q.value = 0.45;
+
+        const shelf = ctx.createBiquadFilter();
+        shelf.type = 'lowshelf';
+        shelf.frequency.value = 220;
+        shelf.gain.value = 4;
+
+        const g = ctx.createGain();
+        g.gain.value = 0.001;
+
+        src.connect(hp);
+        hp.connect(lp);
+        lp.connect(shelf);
+        shelf.connect(g);
+        g.connect(ctx.destination);
+
+        const now = ctx.currentTime;
+        g.gain.setValueAtTime(0.001, now);
+        g.gain.linearRampToValueAtTime(0.11, now + 0.4);
+
+        src.start(now);
+
+        let fadeTimer = null;
+        return {
+          fadeOut(sec = 0.5) {
+            const t = ctx.currentTime;
+            g.gain.cancelScheduledValues(t);
+            const v = Math.max(0.001, g.gain.value);
+            g.gain.setValueAtTime(v, t);
+            g.gain.linearRampToValueAtTime(0.001, t + sec);
+            if (fadeTimer) window.clearTimeout(fadeTimer);
+            fadeTimer = window.setTimeout(() => this.stop(), sec * 1000 + 120);
+          },
+          stop() {
+            if (fadeTimer) {
+              window.clearTimeout(fadeTimer);
+              fadeTimer = null;
+            }
+            try {
+              src.stop();
+            } catch (_) {}
+            try {
+              src.disconnect();
+              hp.disconnect();
+              lp.disconnect();
+              shelf.disconnect();
+              g.disconnect();
+            } catch (_) {}
+          },
+        };
+      }
+
+      document.getElementById('play').addEventListener('click', async () => {
+        if (!AudioCtx) {
+          alert('Web Audio not supported.');
+          return;
+        }
+        if (!sharedCtx || sharedCtx.state === 'closed') {
+          sharedCtx = new AudioCtx();
+        }
+        try {
+          await sharedCtx.resume();
+        } catch (e) {
+          console.warn(e);
+        }
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+
+        playTripleBellChime(sharedCtx);
+
+        window.setTimeout(() => {
+          const bed = startInflightAmbience(sharedCtx);
+          const u = new SpeechSynthesisUtterance(
+            'Attention please. Your next focus block is: review daily allocations. Thank you.',
+          );
+          u.lang = 'en-GB';
+          u.rate = 0.92;
+          u.pitch = 0.95;
+          const end = () => bed.fadeOut(0.55);
+          u.onend = end;
+          u.onerror = end;
+          window.speechSynthesis.speak(u);
+        }, TRIPLE_CHIME_TO_SPEECH_MS);
+      });
+    </script>
+  </body>
+</html>
