@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import LearnTab from './components/LearnTab.jsx';
+import Dashboard from './components/Dashboard.jsx';
+import ScheduleSettings from './components/ScheduleSettings.jsx';
 import {
   recordTaskCompletion,
   recordProcrastination,
@@ -7,6 +9,21 @@ import {
   getLearnSettings,
   buildCoachMessage,
 } from './lib/learn';
+import { speak, getVoiceEnabled } from './lib/voice.js';
+import FlightStrip from './components/FlightStrip.jsx';
+import { getFlightPlanState, COCKTAILS_FLIGHT_PLAN } from './lib/flightPlan.js';
+import DayFlightBoard from './components/DayFlightBoard.jsx';
+import TaskBuilder from './components/TaskBuilder.jsx';
+import { loadTasks } from './lib/taskStore.js';
+import { todayKey, loadDayChecksSet, saveDayChecksSet } from './lib/dayPlan.js';
+import { loadDisruptions, saveDisruptionsForDay } from './lib/flightDisruptions.js';
+import { getBellCheckinsForDay, recordBellCheckin } from './lib/routeBell.js';
+import { getWorkWeekProgressPercent } from './lib/workSchedule.js';
+import { addStressEvent } from './lib/stress.js';
+import StressReport from './components/StressReport.jsx';
+import WorkAlignmentTab from './components/WorkAlignmentTab.jsx';
+import IssuesLogTab from './components/IssuesLogTab.jsx';
+import LegGuidanceCard from './components/LegGuidanceCard.jsx';
 
 const SNOOZE_KEY = 'mik_snooze_until';
 
@@ -78,6 +95,16 @@ function App() {
     }
   });
   const [snoozeUntil, setSnoozeUntil] = useState(() => readSnoozeFromStorage());
+  const [tasks, setTasks] = useState(() => loadTasks(INITIAL_TASKS));
+  const [dayChecks, setDayChecks] = useState(() => loadDayChecksSet());
+  const [dayKey, setDayKey] = useState(() => todayKey());
+  const [dayDisruptions, setDayDisruptions] = useState(() => loadDisruptions(todayKey()));
+  const [bellCheckins, setBellCheckins] = useState(() => getBellCheckinsForDay(todayKey()));
+  const [stressSession, setStressSession] = useState(null);
+
+  const voiceBootRef = useRef(false);
+  const prevBlockIdRef = useRef(null);
+  const prevSnoozeRef = useRef(null);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -91,6 +118,106 @@ function App() {
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const sync = () => setTasks(loadTasks(INITIAL_TASKS));
+    window.addEventListener('mik-tasks-updated', sync);
+    return () => window.removeEventListener('mik-tasks-updated', sync);
+  }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      const k = todayKey();
+      if (k !== dayKey) {
+        setDayKey(k);
+        setDayChecks(loadDayChecksSet());
+      }
+    }, 15000);
+    return () => clearInterval(t);
+  }, [dayKey]);
+
+  useEffect(() => {
+    setDayDisruptions(loadDisruptions(dayKey));
+  }, [dayKey]);
+
+  useEffect(() => {
+    setBellCheckins(getBellCheckinsForDay(dayKey));
+  }, [dayKey]);
+
+  useEffect(() => {
+    const sync = () => setBellCheckins(getBellCheckinsForDay(dayKey));
+    window.addEventListener('mik-bells-updated', sync);
+    return () => window.removeEventListener('mik-bells-updated', sync);
+  }, [dayKey]);
+
+  const toggleDayCheck = (blockId) => {
+    setDayChecks((prev) => {
+      const next = new Set(prev);
+      if (next.has(blockId)) next.delete(blockId);
+      else next.add(blockId);
+      saveDayChecksSet(next);
+      return next;
+    });
+  };
+
+  const handleDisruptionChange = (blockId, status) => {
+    setDayDisruptions((prev) => {
+      const next = { ...prev };
+      const key = String(blockId);
+      if (status === 'none') delete next[key];
+      else next[key] = status;
+      saveDisruptionsForDay(dayKey, next);
+      return next;
+    });
+  };
+
+  const { activeBlock, activeBlockIndex } = useMemo(() => {
+    let idx = -1;
+    const currentMs = currentTime.getTime();
+    for (let i = 0; i < scheduleWithDates.length; i++) {
+      if (currentMs >= scheduleWithDates[i].startTime.getTime() && currentMs < scheduleWithDates[i].endTime.getTime()) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx === -1 && currentMs < scheduleWithDates[0].startTime.getTime()) {
+      idx = 0;
+    }
+    const block = idx !== -1 ? scheduleWithDates[idx] : null;
+    return { activeBlock: block, activeBlockIndex: idx };
+  }, [currentTime]);
+
+  useEffect(() => {
+    if (!getVoiceEnabled()) {
+      if (activeBlock) prevBlockIdRef.current = activeBlock.id;
+      else prevBlockIdRef.current = null;
+      return;
+    }
+    if (!activeBlock) {
+      prevBlockIdRef.current = null;
+      return;
+    }
+    if (!voiceBootRef.current) {
+      voiceBootRef.current = true;
+      prevBlockIdRef.current = activeBlock.id;
+      return;
+    }
+    if (prevBlockIdRef.current === activeBlock.id) return;
+    prevBlockIdRef.current = activeBlock.id;
+    speak(`Now: ${activeBlock.title}.`);
+  }, [activeBlock]);
+
+  useEffect(() => {
+    if (!getVoiceEnabled()) {
+      prevSnoozeRef.current = snoozeUntil;
+      return;
+    }
+    const prev = prevSnoozeRef.current;
+    if (prev && !snoozeUntil) {
+      speak('Break time is over. Ready when you are.');
+    }
+    prevSnoozeRef.current = snoozeUntil;
+  }, [snoozeUntil]);
 
   const handleNotesChange = (e) => {
     setActiveTaskNotes(e.target.value);
@@ -136,20 +263,7 @@ function App() {
     return `${padZero(h)}:${padZero(m)}:${padZero(s)}`;
   };
 
-  // Calculate Active Block
-  let activeBlockIndex = -1;
   const currentMs = currentTime.getTime();
-  for (let i = 0; i < scheduleWithDates.length; i++) {
-    if (currentMs >= scheduleWithDates[i].startTime.getTime() && currentMs < scheduleWithDates[i].endTime.getTime()) {
-      activeBlockIndex = i;
-      break;
-    }
-  }
-  if (activeBlockIndex === -1 && currentMs < scheduleWithDates[0].startTime.getTime()) {
-    activeBlockIndex = 0;
-  }
-
-  const activeBlock = activeBlockIndex !== -1 ? scheduleWithDates[activeBlockIndex] : null;
 
   let countdownText = "00:00:00";
   let countdownPercentage = 0;
@@ -206,13 +320,85 @@ function App() {
     localStorage.removeItem(SNOOZE_KEY);
   };
 
+  const handleStressStart = () => {
+    if (stressSession) return;
+    const block = activeBlock;
+    setStressSession({
+      startedAt: Date.now(),
+      blockId: block?.id ?? null,
+      blockTitle: block?.title ?? 'Off schedule / no active block',
+      blockTime: block?.time ?? '',
+    });
+  };
+
+  const handleRingBell = (blockId) => {
+    recordBellCheckin(dayKey, blockId);
+    setBellCheckins(getBellCheckinsForDay(dayKey));
+  };
+
+  const handleStressEnd = (triggerNote) => {
+    if (!stressSession) return;
+    addStressEvent({
+      startedAt: stressSession.startedAt,
+      endedAt: Date.now(),
+      blockId: stressSession.blockId,
+      blockTitle: stressSession.blockTitle,
+      blockTime: stressSession.blockTime,
+      triggerNote,
+    });
+    setStressSession(null);
+  };
+
   // VIEWS
-  const renderHourlyFocus = () => (
+  const renderHourlyFocus = () => {
+    const offClock = !activeBlock;
+    const flightPlan = offClock
+      ? COCKTAILS_FLIGHT_PLAN
+      : getFlightPlanState({
+          scheduleWithDates,
+          currentMs,
+          activeBlockIndex,
+          inSnooze,
+        });
+    const weekPct = getWorkWeekProgressPercent(currentTime);
+
+    return (
     <>
       <div className="greeting">
         <h1>Hourly Tracker</h1>
-        <p>{currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} • Keep momentum, stay on track.</p>
+        <p>
+          {currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} • Flight plan for
+          the day — <strong>ring the bell</strong> at each leg when you’re on route, tick blocks to stay aligned, and use{' '}
+          <strong>Disrupt</strong> for delay, standby, or cancelled (detail lives in Task Builder).
+        </p>
       </div>
+
+      <div className="flight-plan-card">
+        <div className="flight-plan-lead">
+          <span className="flight-plan-kicker">{offClock ? 'Off the clock' : "Today's flight"}</span>
+          <p className="flight-plan-headline">{flightPlan.meta.label}</p>
+          <p className="flight-plan-sub">{flightPlan.meta.hint}</p>
+        </div>
+        <FlightStrip activeId={flightPlan.activeId} />
+      </div>
+
+      <DayFlightBoard
+        scheduleWithDates={scheduleWithDates}
+        activeBlockIndex={activeBlockIndex}
+        currentMs={currentMs}
+        currentTime={currentTime}
+        checkedSet={dayChecks}
+        onToggleBlock={toggleDayCheck}
+        weekProgressPercent={weekPct}
+        stressSession={stressSession}
+        onStressStart={handleStressStart}
+        onStressEnd={handleStressEnd}
+        disruptions={dayDisruptions}
+        onDisruptionChange={handleDisruptionChange}
+        activeBlock={activeBlock}
+        bellCheckins={bellCheckins}
+        onRingBell={handleRingBell}
+      />
 
       <div className="dashboard-grid">
         <div className="layout-main">
@@ -234,7 +420,7 @@ function App() {
                 <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '24px' }}>
                   <div style={{ height: '100%', width: `${countdownPercentage}%`, background: 'var(--accent)', transition: 'width 1s linear' }} />
                 </div>
-                <div className="coach-card">
+                <div className="coach-card coach-card--compact">
                   <p className="coach-text">{coachMessage}</p>
                   {nextBlock && (
                     <p className="coach-next">
@@ -243,6 +429,7 @@ function App() {
                     </p>
                   )}
                 </div>
+                <LegGuidanceCard key={activeBlock.id} activeBlock={activeBlock} />
                 <div className="block-actions" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
                   <button type="button" className="btn primary" onClick={handleMarkComplete}>
                     Mark complete
@@ -292,33 +479,40 @@ function App() {
           </div>
         </div>
 
-        <div className="timeline-card">
-          <h2 className="card-title"><span>🗓️</span> Schedule Timeline</h2>
-          <div className="timeline">
+        <div className="timeline-card schedule-timeline-card">
+          <h2 className="card-title">
+            <span>◇</span> Schedule timeline
+          </h2>
+          <ul className="schedule-timeline">
             {scheduleWithDates.map((block, index) => {
-              let statusClass = "future";
-              if (index === activeBlockIndex) statusClass = "active";
-              else if (index < activeBlockIndex || (activeBlockIndex === -1 && currentMs > block.endTime.getTime())) statusClass = "past";
+              let statusClass = 'future';
+              if (index === activeBlockIndex) statusClass = 'active';
+              else if (index < activeBlockIndex || (activeBlockIndex === -1 && currentMs > block.endTime.getTime())) {
+                statusClass = 'past';
+              }
               return (
-                <div className={`timeline-item ${statusClass}`} key={block.id}>
-                  <div className="timeline-dot"></div>
-                  <div className="timeline-time">{block.time}</div>
-                  <div className="timeline-content">
-                    <h4>{block.title}</h4>
-                    <p>{block.detail}</p>
+                <li className={`schedule-timeline-item schedule-timeline-item--${statusClass}`} key={block.id}>
+                  <span className="schedule-timeline-marker" aria-hidden />
+                  <div className="schedule-timeline-panel">
+                    <div className="schedule-timeline-heading">
+                      <span className="schedule-timeline-time">{block.time}</span>
+                      <h4 className="schedule-timeline-title">{block.title}</h4>
+                    </div>
+                    <p className="schedule-timeline-detail">{block.detail}</p>
                   </div>
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         </div>
       </div>
     </>
-  );
+    );
+  };
 
   const renderWorkQueue = () => {
     const completedCount = Object.keys(globalNotes).filter(k => globalNotes[k]?.toLowerCase().includes('done')).length;
-    const progressPercent = INITIAL_TASKS.length === 0 ? 0 : Math.round((completedCount / INITIAL_TASKS.length) * 100);
+    const progressPercent = tasks.length === 0 ? 0 : Math.round((completedCount / tasks.length) * 100);
 
     return (
       <>
@@ -330,13 +524,14 @@ function App() {
         <div className="dashboard-grid">
           <div className="task-column">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {INITIAL_TASKS.map(task => {
+              {tasks.map(task => {
                 let badgeClass = task.remoteSite.toLowerCase() === 'site' ? 'site' : 'remote';
+                const heading = task.title || task.localOffice || 'Task';
                 return (
                   <div className="timeline-card" style={{ padding: '24px', opacity: globalNotes[task.id]?.toLowerCase().includes('done') ? 0.6 : 1 }} key={task.id}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-                      <div style={{ fontSize: '18px', fontWeight: '600' }}>{task.localOffice}</div>
-                      <div className={`badge ${badgeClass}`} style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 'bold' }}>{task.remoteSite}</div>
+                      <div style={{ fontSize: '18px', fontWeight: '600' }}>{heading}</div>
+                      <div className={`badge ${badgeClass}`} style={{ background: 'rgba(251, 191, 36, 0.12)', color: '#fcd34d', padding: '4px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold', letterSpacing: '0.04em' }}>{task.remoteSite}</div>
                     </div>
                     <div style={{ display: 'flex', gap: '16px', fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
                       <div><span>👤</span> Assessor: <strong>{task.assessor}</strong></div>
@@ -369,7 +564,7 @@ function App() {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-around', marginTop: '24px' }}>
                 <div>
-                  <div style={{ fontSize: '20px', fontWeight: '600' }}>{INITIAL_TASKS.length}</div>
+                  <div style={{ fontSize: '20px', fontWeight: '600' }}>{tasks.length}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Allocated</div>
                 </div>
                 <div>
@@ -379,7 +574,7 @@ function App() {
               </div>
             </div>
 
-            <div style={{ marginTop: '30px', padding: '16px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+            <div style={{ marginTop: '30px', padding: '16px', background: 'rgba(251, 191, 36, 0.08)', borderRadius: '6px', border: '1px solid rgba(251, 191, 36, 0.25)' }}>
               <span style={{ fontSize: '24px', display: 'block', marginBottom: '8px' }}>🚀</span>
               <strong>Live Sync Pending</strong>
               <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>This view currently runs on mock data. We will connect this to the Google Apps Script Web App endpoint soon to pull your live row arrays.</p>
@@ -408,51 +603,90 @@ function App() {
     </>
   );
 
-  const renderSettings = () => (
-    <>
-      <div className="greeting">
-        <h1>Settings</h1>
-        <p>Configure your application preferences.</p>
-      </div>
-      <div className="timeline-card" style={{ textAlign: 'center', padding: '60px 20px' }}>
-        <div style={{ fontSize: '64px', marginBottom: '20px' }}>⚙️</div>
-        <h2>Application Settings</h2>
-        <p style={{ color: 'var(--text-secondary)', maxWidth: '500px', margin: '0 auto 30px', lineHeight: '1.6' }}>
-          Settings configuration options will appear here. For now, all preferences are set to their defaults.
-        </p>
-      </div>
-    </>
-  );
+  const renderSettings = () => <ScheduleSettings />;
 
   return (
-    <div className="app-container">
+    <div className="app-container fids-shell">
       <div className="sidebar">
-        <div className="brand">Mik Manager</div>
+        <div className="sidebar-brand-block">
+          <div className="brand" title="Mik Manager">
+            MIK
+          </div>
+          <div className="sidebar-tagline">Operations display</div>
+        </div>
         <div className={`nav-item ${activeTab === 'hourly' ? 'active' : ''}`} onClick={() => setActiveTab('hourly')}>
-          <span>⏱️</span> Hourly Focus
+          <span className="nav-glyph" aria-hidden>
+            ◆
+          </span>{' '}
+          Hourly focus
+        </div>
+        <div className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
+          <span className="nav-glyph" aria-hidden>
+            ▤
+          </span>{' '}
+          Dashboard
+        </div>
+        <div className={`nav-item ${activeTab === 'taskbuilder' ? 'active' : ''}`} onClick={() => setActiveTab('taskbuilder')}>
+          <span className="nav-glyph" aria-hidden>
+            ✎
+          </span>{' '}
+          Task builder
         </div>
         <div className={`nav-item ${activeTab === 'workqueue' ? 'active' : ''}`} onClick={() => setActiveTab('workqueue')}>
-          <span>📋</span> Work Queue
+          <span className="nav-glyph" aria-hidden>
+            ☰
+          </span>{' '}
+          Work queue
         </div>
         <div className={`nav-item ${activeTab === 'learn' ? 'active' : ''}`} onClick={() => setActiveTab('learn')}>
-          <span>🧠</span> Learn
+          <span className="nav-glyph" aria-hidden>
+            ◉
+          </span>{' '}
+          Learn
+        </div>
+        <div className={`nav-item ${activeTab === 'stress' ? 'active' : ''}`} onClick={() => setActiveTab('stress')}>
+          <span className="nav-glyph" aria-hidden>
+            ●
+          </span>{' '}
+          Stress log
+        </div>
+        <div className={`nav-item ${activeTab === 'issues' ? 'active' : ''}`} onClick={() => setActiveTab('issues')}>
+          <span className="nav-glyph" aria-hidden>
+            !
+          </span>{' '}
+          Issues log
+        </div>
+        <div className={`nav-item ${activeTab === 'alignment' ? 'active' : ''}`} onClick={() => setActiveTab('alignment')}>
+          <span className="nav-glyph" aria-hidden>
+            ☷
+          </span>{' '}
+          1:1 alignment
         </div>
         <div className={`nav-item ${activeTab === 'calendar' ? 'active' : ''}`} onClick={() => setActiveTab('calendar')}>
-          <span>🗓️</span> Calendar Sync
+          <span className="nav-glyph" aria-hidden>
+            ⌗
+          </span>{' '}
+          Calendar sync
         </div>
-        <div 
-          className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} 
-          style={{ marginTop: 'auto' }}
-          onClick={() => setActiveTab('settings')}
-        >
-          <span>⚙️</span> Settings
+        <div className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} style={{ marginTop: 'auto' }} onClick={() => setActiveTab('settings')}>
+          <span className="nav-glyph" aria-hidden>
+            ⚙
+          </span>{' '}
+          Settings
         </div>
       </div>
 
       <div className="main-content">
         {activeTab === 'hourly' && renderHourlyFocus()}
+        {activeTab === 'dashboard' && (
+          <Dashboard tasks={tasks} globalNotes={globalNotes} currentTime={currentTime} />
+        )}
+        {activeTab === 'taskbuilder' && <TaskBuilder seedTasks={INITIAL_TASKS} />}
         {activeTab === 'workqueue' && renderWorkQueue()}
         {activeTab === 'learn' && <LearnTab />}
+        {activeTab === 'stress' && <StressReport />}
+        {activeTab === 'issues' && <IssuesLogTab />}
+        {activeTab === 'alignment' && <WorkAlignmentTab />}
         {activeTab === 'calendar' && renderCalendarSync()}
         {activeTab === 'settings' && renderSettings()}
       </div>

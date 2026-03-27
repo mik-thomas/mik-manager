@@ -143,6 +143,18 @@ export function getLearnStats() {
   };
 }
 
+export function countCompletionsSinceMs(periodMs) {
+  const state = loadRaw();
+  const cutoff = Date.now() - periodMs;
+  return state.completions.filter((c) => new Date(c.at).getTime() >= cutoff).length;
+}
+
+export function countProcrastinationsSinceMs(periodMs) {
+  const state = loadRaw();
+  const cutoff = Date.now() - periodMs;
+  return state.procrastinations.filter((p) => new Date(p.at).getTime() >= cutoff).length;
+}
+
 /**
  * Coach copy for the focus surface — uses your history, not an API.
  */
